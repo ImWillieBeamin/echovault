@@ -1,0 +1,544 @@
+"""SQLite database layer with FTS5 and sqlite-vec for memory storage."""
+
+import json
+import struct
+from typing import Optional
+
+# Try pysqlite3-binary first (has extension support), fall back to sqlite3
+try:
+    import pysqlite3.dbapi2 as sqlite3
+except ImportError:
+    import sqlite3
+
+import sqlite_vec
+
+from memory.models import Memory, MemoryDetail
+
+
+class MemoryDB:
+    """SQLite database for storing and searching memories."""
+
+    def __init__(self, db_path: str) -> None:
+        """Initialize database connection and create schema.
+
+        Args:
+            db_path: Path to SQLite database file
+        """
+        self.db_path = db_path
+        self.conn = sqlite3.connect(db_path)
+        self.conn.row_factory = sqlite3.Row
+
+        # Enable extension loading and load sqlite-vec extension
+        self.conn.enable_load_extension(True)
+        sqlite_vec.load(self.conn)
+        self.conn.enable_load_extension(False)
+
+        # Create schema (vec table is deferred until dimension is known)
+        self._create_schema()
+
+    def _create_schema(self) -> None:
+        """Create database tables and indexes (excluding vec table)."""
+        cursor = self.conn.cursor()
+
+        # Main memories table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                rowid INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                title TEXT NOT NULL,
+                what TEXT NOT NULL,
+                why TEXT,
+                impact TEXT,
+                tags TEXT,
+                category TEXT,
+                project TEXT NOT NULL,
+                source TEXT,
+                related_files TEXT,
+                file_path TEXT NOT NULL,
+                section_anchor TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+        # Memory details table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS memory_details (
+                memory_id TEXT PRIMARY KEY REFERENCES memories(id),
+                body TEXT NOT NULL
+            )
+        """)
+
+        # Metadata table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+
+        # FTS5 virtual table
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                title, what, why, impact, tags, category, project, source,
+                content='memories', content_rowid='rowid',
+                tokenize='porter unicode61'
+            )
+        """)
+
+        # FTS5 auto-sync trigger for INSERT
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                INSERT INTO memories_fts(rowid, title, what, why, impact, tags, category, project, source)
+                VALUES (new.rowid, new.title, new.what, new.why, new.impact, new.tags, new.category, new.project, new.source);
+            END
+        """)
+
+        # Create vec table if dimension is already known (e.g. reopening existing DB)
+        dim = self.get_embedding_dim()
+        if dim is not None:
+            self._create_vec_table(dim)
+
+        self.conn.commit()
+
+    def _create_vec_table(self, dim: int) -> None:
+        """Create the vector table with the given dimension.
+
+        Args:
+            dim: Embedding vector dimension
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
+                rowid INTEGER PRIMARY KEY,
+                embedding float[{dim}]
+            )
+        """)
+        self.conn.commit()
+
+    def has_vec_table(self) -> bool:
+        """Check if the vector table exists."""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name='memories_vec'
+        """)
+        return cursor.fetchone() is not None
+
+    def drop_vec_table(self) -> None:
+        """Drop the vector table."""
+        cursor = self.conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS memories_vec")
+        self.conn.commit()
+
+    def get_embedding_dim(self) -> Optional[int]:
+        """Get the stored embedding dimension from meta table.
+
+        Returns:
+            The embedding dimension, or None if not set
+        """
+        val = self.get_meta("embedding_dim")
+        return int(val) if val is not None else None
+
+    def set_embedding_dim(self, dim: int) -> None:
+        """Store the embedding dimension in meta table.
+
+        Args:
+            dim: Embedding vector dimension
+        """
+        self.set_meta("embedding_dim", str(dim))
+
+    def ensure_vec_table(self, dim: int) -> None:
+        """Ensure the vector table exists with the correct dimension.
+
+        Stores dimension in meta and creates the table if needed.
+
+        Args:
+            dim: Embedding vector dimension
+        """
+        stored_dim = self.get_embedding_dim()
+        if stored_dim is None:
+            self.set_embedding_dim(dim)
+            self._create_vec_table(dim)
+        elif stored_dim != dim:
+            # Dimension mismatch — caller should handle this
+            raise DimensionMismatchError(stored_dim, dim)
+
+    def insert_memory(self, mem: Memory, details: Optional[str] = None) -> int:
+        """Insert a memory into the database.
+
+        Args:
+            mem: Memory object to insert
+            details: Optional full details/body text
+
+        Returns:
+            The rowid of the inserted memory
+        """
+        cursor = self.conn.cursor()
+
+        # Serialize lists as JSON
+        tags_json = json.dumps(mem.tags)
+        related_files_json = json.dumps(mem.related_files)
+
+        cursor.execute("""
+            INSERT INTO memories (
+                id, title, what, why, impact, tags, category, project,
+                source, related_files, file_path, section_anchor,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            mem.id, mem.title, mem.what, mem.why, mem.impact,
+            tags_json, mem.category, mem.project, mem.source,
+            related_files_json, mem.file_path, mem.section_anchor,
+            mem.created_at, mem.updated_at
+        ))
+
+        rowid = cursor.lastrowid
+
+        # Insert details if provided
+        if details:
+            cursor.execute("""
+                INSERT INTO memory_details (memory_id, body)
+                VALUES (?, ?)
+            """, (mem.id, details))
+
+        self.conn.commit()
+        return rowid
+
+    def insert_vector(self, rowid: int, embedding: list[float]) -> None:
+        """Insert an embedding vector for a memory.
+
+        Args:
+            rowid: The rowid of the memory
+            embedding: The embedding vector
+        """
+        if not self.has_vec_table():
+            return
+
+        vec_bytes = struct.pack(f"{len(embedding)}f", *embedding)
+
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO memories_vec (rowid, embedding)
+            VALUES (?, ?)
+        """, (rowid, vec_bytes))
+
+        self.conn.commit()
+
+    def get_memory(self, memory_id: str) -> Optional[dict]:
+        """Get a memory by ID.
+
+        Args:
+            memory_id: The memory ID to retrieve
+
+        Returns:
+            Dictionary with memory data and has_details flag, or None if not found
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT m.*,
+                   EXISTS(SELECT 1 FROM memory_details WHERE memory_id = m.id) as has_details
+            FROM memories m
+            WHERE m.id = ?
+        """, (memory_id,))
+
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        return None
+
+    def get_details(self, memory_id: str) -> Optional[MemoryDetail]:
+        """Get full details for a memory.
+
+        Args:
+            memory_id: The memory ID
+
+        Returns:
+            MemoryDetail object or None if no details exist
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT memory_id, body
+            FROM memory_details
+            WHERE memory_id LIKE ?
+        """, (memory_id + "%",))
+
+        row = cursor.fetchone()
+        if row:
+            return MemoryDetail(memory_id=row["memory_id"], body=row["body"])
+        return None
+
+    def delete_memory(self, memory_id: str) -> bool:
+        """Delete a memory by ID or prefix.
+
+        Removes the memory from the memories table, memory_details, and FTS index.
+
+        Args:
+            memory_id: Full UUID or prefix to match
+
+        Returns:
+            True if a memory was deleted, False if no match found
+        """
+        cursor = self.conn.cursor()
+
+        # Resolve the full ID from prefix
+        cursor.execute(
+            "SELECT id FROM memories WHERE id LIKE ?", (memory_id + "%",)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+
+        full_id = row["id"]
+        cursor.execute("DELETE FROM memory_details WHERE memory_id = ?", (full_id,))
+        cursor.execute("DELETE FROM memories WHERE id = ?", (full_id,))
+        self.conn.commit()
+        return True
+
+    def fts_search(
+        self,
+        query: str,
+        limit: int = 10,
+        project: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> list[dict]:
+        """Search memories using FTS5 full-text search.
+
+        Args:
+            query: Search query string
+            limit: Maximum number of results
+            project: Optional project filter
+            source: Optional source filter
+
+        Returns:
+            List of memory dictionaries with BM25 scores
+        """
+        # Build prefix matching query
+        terms = query.split()
+        fts_query = " OR ".join(f'"{term}"*' for term in terms)
+
+        # Build WHERE clause for filters
+        where_clauses = []
+        params = [fts_query]
+
+        if project:
+            where_clauses.append("m.project = ?")
+            params.append(project)
+
+        if source:
+            where_clauses.append("m.source = ?")
+            params.append(source)
+
+        where_clause = ""
+        if where_clauses:
+            where_clause = "AND " + " AND ".join(where_clauses)
+
+        params.append(limit)
+
+        cursor = self.conn.cursor()
+        cursor.execute(f"""
+            SELECT m.*, -fts.rank as score,
+                   EXISTS(SELECT 1 FROM memory_details WHERE memory_id = m.id) as has_details
+            FROM memories_fts fts
+            JOIN memories m ON m.rowid = fts.rowid
+            WHERE fts.memories_fts MATCH ?
+            {where_clause}
+            ORDER BY fts.rank
+            LIMIT ?
+        """, params)
+
+        return [dict(row) for row in cursor.fetchall()]
+
+    def vector_search(
+        self,
+        query_embedding: list[float],
+        limit: int = 10,
+        project: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> list[dict]:
+        """Search memories using vector similarity.
+
+        Args:
+            query_embedding: Query embedding vector
+            limit: Maximum number of results
+            project: Optional project filter
+            source: Optional source filter
+
+        Returns:
+            List of memory dictionaries with similarity scores
+        """
+        if not self.has_vec_table():
+            return []
+
+        vec_bytes = struct.pack(f"{len(query_embedding)}f", *query_embedding)
+
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT m.*, v.distance,
+                   EXISTS(SELECT 1 FROM memory_details WHERE memory_id = m.id) as has_details
+            FROM memories_vec v
+            JOIN memories m ON m.rowid = v.rowid
+            WHERE v.embedding MATCH ?
+            AND k = ?
+            ORDER BY v.distance
+        """, (vec_bytes, limit))
+
+        results = []
+        for row in cursor.fetchall():
+            result = dict(row)
+            # Convert distance to similarity score (1 - distance)
+            result["score"] = 1.0 - result["distance"]
+            del result["distance"]
+            results.append(result)
+
+        # Post-filter by project/source if needed
+        if project:
+            results = [r for r in results if r["project"] == project]
+        if source:
+            results = [r for r in results if r["source"] == source]
+
+        return results
+
+    def list_recent(
+        self,
+        limit: int = 10,
+        project: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> list[dict]:
+        """List recent memories ordered by creation date descending.
+
+        Args:
+            limit: Maximum number of results
+            project: Optional project filter
+            source: Optional source filter
+
+        Returns:
+            List of memory dictionaries with metadata
+        """
+        where_clauses = []
+        params: list = []
+
+        if project:
+            where_clauses.append("m.project = ?")
+            params.append(project)
+
+        if source:
+            where_clauses.append("m.source = ?")
+            params.append(source)
+
+        where_clause = ""
+        if where_clauses:
+            where_clause = "WHERE " + " AND ".join(where_clauses)
+
+        params.append(limit)
+
+        cursor = self.conn.cursor()
+        cursor.execute(f"""
+            SELECT m.id, m.title, m.category, m.tags, m.project, m.source, m.created_at,
+                   EXISTS(SELECT 1 FROM memory_details WHERE memory_id = m.id) as has_details
+            FROM memories m
+            {where_clause}
+            ORDER BY m.created_at DESC
+            LIMIT ?
+        """, params)
+
+        return [dict(row) for row in cursor.fetchall()]
+
+    def list_all_for_reindex(self) -> list[dict]:
+        """List all memories with fields needed for re-embedding.
+
+        Returns:
+            List of dicts with rowid, title, what, why, impact, tags
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT rowid, title, what, why, impact, tags
+            FROM memories
+            ORDER BY rowid
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def count_memories(
+        self,
+        project: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> int:
+        """Count total memories with optional filters.
+
+        Args:
+            project: Optional project filter
+            source: Optional source filter
+
+        Returns:
+            Total count of matching memories
+        """
+        where_clauses = []
+        params: list = []
+
+        if project:
+            where_clauses.append("project = ?")
+            params.append(project)
+
+        if source:
+            where_clauses.append("source = ?")
+            params.append(source)
+
+        where_clause = ""
+        if where_clauses:
+            where_clause = "WHERE " + " AND ".join(where_clauses)
+
+        cursor = self.conn.cursor()
+        cursor.execute(f"""
+            SELECT COUNT(*) FROM memories {where_clause}
+        """, params)
+
+        return cursor.fetchone()[0]
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Set a metadata key-value pair.
+
+        Args:
+            key: Metadata key
+            value: Metadata value
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO meta (key, value)
+            VALUES (?, ?)
+        """, (key, value))
+        self.conn.commit()
+
+    def get_meta(self, key: str) -> Optional[str]:
+        """Get a metadata value by key.
+
+        Args:
+            key: Metadata key
+
+        Returns:
+            Metadata value or None if key doesn't exist
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT value FROM meta WHERE key = ?
+        """, (key,))
+
+        row = cursor.fetchone()
+        if row:
+            return row["value"]
+        return None
+
+    def close(self) -> None:
+        """Close the database connection."""
+        self.conn.close()
+
+
+class DimensionMismatchError(Exception):
+    """Raised when embedding dimension doesn't match stored dimension."""
+
+    def __init__(self, stored_dim: int, new_dim: int):
+        self.stored_dim = stored_dim
+        self.new_dim = new_dim
+        super().__init__(
+            f"Embedding dimension mismatch: database has {stored_dim}, "
+            f"provider returned {new_dim}. Run 'memory reindex' to rebuild."
+        )
