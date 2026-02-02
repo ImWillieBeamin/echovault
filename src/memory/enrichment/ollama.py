@@ -1,8 +1,15 @@
 import json
+from typing import Optional
 
 import httpx
 
-from memory.enrichment.base import EnrichmentProvider, dedupe_tags
+from memory.enrichment.base import (
+    EXTRACT_MEMORY_PROMPT,
+    EXTRACT_MEMORY_SYSTEM,
+    EnrichmentProvider,
+    dedupe_tags,
+    parse_memory_response,
+)
 
 
 class OllamaEnrichment(EnrichmentProvider):
@@ -39,3 +46,20 @@ class OllamaEnrichment(EnrichmentProvider):
 
         rough = [t.strip() for t in content.replace("\n", ",").split(",") if t.strip()]
         return dedupe_tags(rough, max_tags=max_tags)
+
+    def extract_memory(self, response: str, max_chars: int = 4000) -> Optional[dict]:
+        truncated = response[:max_chars]
+        payload = {
+            "model": self.model,
+            "system": EXTRACT_MEMORY_SYSTEM,
+            "prompt": EXTRACT_MEMORY_PROMPT.format(response=truncated),
+            "stream": False,
+        }
+        resp = httpx.post(
+            f"{self.base_url.rstrip('/')}/api/generate",
+            json=payload,
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        content = resp.json().get("response", "").strip()
+        return parse_memory_response(content)

@@ -198,6 +198,17 @@ CLAUDE_CODE_HOOKS = {
             ]
         }
     ],
+    "Stop": [
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": 'echo "$CLAUDE_RESPONSE" | memory auto-save --project --source claude-code',
+                    "timeout": 15,
+                }
+            ]
+        }
+    ],
 }
 
 
@@ -216,9 +227,15 @@ def setup_claude_code(claude_home: str) -> dict[str, str]:
     hooks = settings.setdefault("hooks", {})
     installed = []
 
+    _HOOK_FRAGMENTS = {
+        "UserPromptSubmit": "memory context",
+        "Stop": "memory auto-save",
+    }
+
     for event, hook_config in CLAUDE_CODE_HOOKS.items():
         event_hooks = hooks.setdefault(event, [])
-        if not _has_memory_hook(event_hooks, "memory context"):
+        fragment = _HOOK_FRAGMENTS.get(event, "memory")
+        if not _has_memory_hook(event_hooks, fragment):
             event_hooks.extend(hook_config)
             installed.append(event)
 
@@ -273,7 +290,9 @@ def setup_cursor(cursor_home: str) -> dict[str, str]:
         installed.append("skill")
 
     if installed:
-        return {"status": "ok", "message": f"Installed: {', '.join(installed)}"}
+        msg = f"Installed: {', '.join(installed)}"
+        msg += "\nNote: Auto-persist (Stop hook) is only available for Claude Code. Cursor relies on skill instructions for saving."
+        return {"status": "ok", "message": msg}
     return {"status": "ok", "message": "Already installed"}
 
 
@@ -363,7 +382,9 @@ def setup_codex(codex_home: str) -> dict[str, str]:
     if skill_installed:
         installed.append("skill")
 
-    return {"status": "ok", "message": f"Installed: {', '.join(installed)}"}
+    msg = f"Installed: {', '.join(installed)}"
+    msg += "\nNote: Auto-persist (Stop hook) is only available for Claude Code. Codex relies on AGENTS.md instructions for saving."
+    return {"status": "ok", "message": msg}
 
 
 def uninstall_claude_code(claude_home: str) -> dict[str, str]:
@@ -374,11 +395,16 @@ def uninstall_claude_code(claude_home: str) -> dict[str, str]:
     hooks = settings.get("hooks", {})
     removed = []
 
+    memory_fragments = ("memory context", "memory auto-save")
+
     for event in list(hooks.keys()):
         event_hooks = hooks[event]
         filtered = [
             group for group in event_hooks
-            if not any("memory context" in h.get("command", "") for h in group.get("hooks", []))
+            if not any(
+                any(frag in h.get("command", "") for frag in memory_fragments)
+                for h in group.get("hooks", [])
+            )
         ]
         if len(filtered) != len(event_hooks):
             removed.append(event)

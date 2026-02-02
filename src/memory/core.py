@@ -278,6 +278,50 @@ class MemoryService:
 
         return {"id": mem.id, "file_path": file_path}
 
+    def auto_save(
+        self,
+        response: str,
+        project: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Auto-save a memory from an agent response using enrichment.
+
+        Uses the configured enrichment provider to decide if the response
+        is worth saving and to extract structured fields.
+
+        Args:
+            response: The agent's response text.
+            project: Optional project name.
+            source: Optional source identifier (e.g. "claude-code").
+
+        Returns:
+            Save result dict with 'id' and 'file_path', or None if skipped.
+        """
+        provider = self.enrichment_provider
+        if provider is None:
+            return None
+
+        try:
+            extracted = provider.extract_memory(response)
+        except Exception:
+            return None
+
+        if extracted is None:
+            return None
+
+        raw = RawMemoryInput(
+            title=extracted["title"],
+            what=extracted["what"],
+            why=extracted.get("why"),
+            impact=extracted.get("impact"),
+            tags=extracted.get("tags", []),
+            category=extracted.get("category"),
+            details=extracted.get("details"),
+            source=source,
+        )
+
+        return self.save(raw, project=project, enrich=False)
+
     def search(
         self,
         query: str,

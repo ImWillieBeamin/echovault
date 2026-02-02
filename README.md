@@ -171,6 +171,9 @@ To also remove all stored memories: `rm -rf ~/.memory/`
 
 Everything stays local by default. If you configure OpenAI or OpenRouter for embeddings, those API calls go to their servers. Use Ollama for fully local operation.
 
+
+### NOTE: I have mostly used this with Claude Code
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -1,9 +1,11 @@
 import random
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
 
 from memory.embeddings.base import EmbeddingProvider
+from memory.enrichment.base import EnrichmentProvider
 
 
 class FakeEmbeddingProvider(EmbeddingProvider):
@@ -45,3 +47,20 @@ def env_home(tmp_vault, monkeypatch):
         return_value=fake,
     ):
         yield tmp_vault
+
+
+class FakeEnrichmentProvider(EnrichmentProvider):
+    """Fake enrichment provider for tests.
+
+    Returns predetermined results for extract_tags and extract_memory.
+    """
+
+    def __init__(self, tags: list[str] | None = None, memory: dict | None = None):
+        self._tags = tags or ["test-tag"]
+        self._memory = memory
+
+    def extract_tags(self, text: str, max_tags: int = 8) -> list[str]:
+        return self._tags[:max_tags]
+
+    def extract_memory(self, response: str, max_chars: int = 4000) -> Optional[dict]:
+        return self._memory

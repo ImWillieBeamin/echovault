@@ -142,6 +142,32 @@ def save(title, what, why, impact, tags, category, related_files, details, sourc
     click.echo(f"File: {result['file_path']}")
 
 
+@main.command("auto-save")
+@click.option(
+    "--project",
+    is_flag=True,
+    default=False,
+    help="Use current directory name as project",
+)
+@click.option("--source", default=None, help="Source identifier (e.g. claude-code)")
+def auto_save(project, source):
+    """Auto-save a memory from agent response (reads stdin)."""
+    import sys as _sys
+
+    response = _sys.stdin.read()
+    if not response.strip():
+        return
+
+    project_name = os.path.basename(os.getcwd()) if project else None
+
+    svc = MemoryService()
+    result = svc.auto_save(response, project=project_name, source=source)
+    svc.close()
+
+    if result:
+        click.echo(f"Auto-saved: {result['id']}")
+
+
 @main.command()
 @click.argument("query")
 @click.option("--limit", default=5, help="Maximum number of results")

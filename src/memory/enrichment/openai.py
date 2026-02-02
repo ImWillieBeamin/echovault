@@ -1,8 +1,15 @@
 import json
+from typing import Optional
 
 import httpx
 
-from memory.enrichment.base import EnrichmentProvider, dedupe_tags
+from memory.enrichment.base import (
+    EXTRACT_MEMORY_PROMPT,
+    EXTRACT_MEMORY_SYSTEM,
+    EnrichmentProvider,
+    dedupe_tags,
+    parse_memory_response,
+)
 
 
 class OpenAIEnrichment(EnrichmentProvider):
@@ -45,3 +52,26 @@ class OpenAIEnrichment(EnrichmentProvider):
 
         rough = [t.strip() for t in content.replace("\n", ",").split(",") if t.strip()]
         return dedupe_tags(rough, max_tags=max_tags)
+
+    def extract_memory(self, response: str, max_chars: int = 4000) -> Optional[dict]:
+        if not self.api_key:
+            return None
+
+        truncated = response[:max_chars]
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": EXTRACT_MEMORY_SYSTEM},
+                {"role": "user", "content": EXTRACT_MEMORY_PROMPT.format(response=truncated)},
+            ],
+            "temperature": 0.2,
+        }
+        resp = httpx.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json=payload,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"].strip()
+        return parse_memory_response(content)
