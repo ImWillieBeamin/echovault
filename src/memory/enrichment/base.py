@@ -32,13 +32,13 @@ EXTRACT_MEMORY_SYSTEM = "You are a memory extraction assistant for a coding agen
 EXTRACT_MEMORY_PROMPT = """\
 Given the agent's response below, decide if it contains anything worth remembering for future sessions.
 
-Worth saving: decisions, bug fixes, discoveries, architecture discussions, configuration changes, patterns learned, tradeoffs considered.
+Worth saving: decisions, bug fixes, discoveries, architecture discussions, configuration changes, patterns learned, tradeoffs considered, and non-code discussions (e.g. documentation drafts, planning conversations).
 
 NOT worth saving: greetings, simple file reads, acknowledgments, clarifying questions, trivial responses.
 
 If NOT worth saving, respond with: {{"save": false}}
 If worth saving, respond with:
-{{"save": true, "title": "Short descriptive title (under 80 chars)", "what": "What happened or was decided", "why": "Reasoning behind it", "impact": "What changed as a result", "category": "decision|bug|pattern|context|learning", "tags": ["tag1", "tag2", "tag3"], "details": "Full context with all important details"}}
+{{"save": true, "title": "Short descriptive title (under 80 chars)", "what": "What happened or was decided", "why": "Reasoning behind it", "impact": "What changed as a result", "category": "decision|bug|pattern|context|learning|miscellaneous", "tags": ["tag1", "tag2", "tag3"], "details": "Full context with all important details"}}
 
 Respond ONLY with valid JSON, no prose.
 
@@ -46,7 +46,7 @@ Agent response:
 {response}"""
 
 
-VALID_CATEGORIES = {"decision", "bug", "pattern", "context", "learning"}
+VALID_CATEGORIES = {"decision", "bug", "pattern", "context", "learning", "miscellaneous"}
 
 
 def parse_memory_response(content: str) -> Optional[dict]:

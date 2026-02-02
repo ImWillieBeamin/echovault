@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-VALID_CATEGORIES = ("decision", "pattern", "bug", "context", "learning")
+VALID_CATEGORIES = ("decision", "pattern", "bug", "context", "learning", "miscellaneous")
 
 CATEGORY_HEADINGS = {
     "decision": "Decisions",
@@ -14,6 +14,7 @@ CATEGORY_HEADINGS = {
     "bug": "Bugs Fixed",
     "context": "Context",
     "learning": "Learnings",
+    "miscellaneous": "Miscellaneous",
 }
 
 

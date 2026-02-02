@@ -198,6 +198,18 @@ CLAUDE_CODE_HOOKS = {
             ]
         }
     ],
+    "PostToolUse": [
+        {
+            "matcher": "Read|Write|Edit",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": 'echo "$TOOL_INPUT" | memory auto-save --project --source claude-code',
+                    "timeout": 15,
+                }
+            ]
+        }
+    ],
     "Stop": [
         {
             "hooks": [
@@ -229,6 +241,7 @@ def setup_claude_code(claude_home: str) -> dict[str, str]:
 
     _HOOK_FRAGMENTS = {
         "UserPromptSubmit": "memory context",
+        "PostToolUse": "memory auto-save",
         "Stop": "memory auto-save",
     }
 

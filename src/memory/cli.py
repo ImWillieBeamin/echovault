@@ -103,7 +103,7 @@ def config_init(force):
 @click.option("--tags", default="", help="Comma-separated tags")
 @click.option(
     "--category",
-    type=click.Choice(["decision", "pattern", "bug", "context", "learning"]),
+    type=click.Choice(["decision", "pattern", "bug", "context", "learning", "miscellaneous"]),
     default=None,
     help="Category of the memory",
 )

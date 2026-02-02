@@ -54,6 +54,19 @@ class TestClaudeCodeSetup:
         assert hooks[0]["hooks"][0]["type"] == "command"
         assert "memory context" in hooks[0]["hooks"][0]["command"]
 
+    def test_installs_post_tool_use_hook(self, claude_home):
+        from memory.setup import setup_claude_code
+
+        setup_claude_code(str(claude_home))
+
+        settings = json.loads((claude_home / "settings.json").read_text())
+        hooks = settings["hooks"]["PostToolUse"]
+        assert len(hooks) == 1
+        assert hooks[0]["matcher"] == "Read|Write|Edit"
+        assert hooks[0]["hooks"][0]["type"] == "command"
+        assert "memory auto-save" in hooks[0]["hooks"][0]["command"]
+        assert "$TOOL_INPUT" in hooks[0]["hooks"][0]["command"]
+
     def test_does_not_duplicate_hooks(self, claude_home):
         from memory.setup import setup_claude_code
 
