@@ -378,3 +378,74 @@ def test_list_all_for_reindex(db):
     assert len(memories) == 3
     assert all("rowid" in m for m in memories)
     assert all("title" in m for m in memories)
+
+
+class TestFTSSanitization:
+    """Test FTS query sanitization to prevent injection."""
+
+    def test_escape_quotes_in_query(self, db, sample_memory):
+        """Query with double quotes should be escaped and not crash."""
+        db.insert_memory(sample_memory)
+
+        # This should not raise an error
+        results = db.fts_search('test "quoted" text', limit=10)
+        # May or may not find results, but should not crash
+        assert isinstance(results, list)
+
+    def test_escape_special_fts_operators(self, db, sample_memory):
+        """FTS operators like AND, OR, NOT should be handled safely."""
+        db.insert_memory(sample_memory)
+
+        # These should not raise errors
+        results = db.fts_search("test AND bug", limit=10)
+        assert isinstance(results, list)
+
+        results = db.fts_search("test OR bug", limit=10)
+        assert isinstance(results, list)
+
+        results = db.fts_search("NOT test", limit=10)
+        assert isinstance(results, list)
+
+    def test_escape_parentheses(self, db, sample_memory):
+        """Parentheses in queries should be handled safely."""
+        db.insert_memory(sample_memory)
+
+        # Unbalanced parentheses should not crash
+        results = db.fts_search("test (unbalanced", limit=10)
+        assert isinstance(results, list)
+
+        results = db.fts_search("test ) unbalanced", limit=10)
+        assert isinstance(results, list)
+
+    def test_escape_asterisk(self, db, sample_memory):
+        """Asterisks should be handled safely."""
+        db.insert_memory(sample_memory)
+
+        # Should not crash with asterisks
+        results = db.fts_search("test*", limit=10)
+        assert isinstance(results, list)
+
+        results = db.fts_search("*test", limit=10)
+        assert isinstance(results, list)
+
+    def test_normal_search_unaffected(self, db, sample_memory):
+        """Normal queries should still work correctly."""
+        db.insert_memory(sample_memory)
+
+        results = db.fts_search("authentication", limit=10)
+        assert len(results) > 0
+        assert results[0]["id"] == sample_memory.id
+
+    def test_empty_query(self, db, sample_memory):
+        """Empty query should be handled safely."""
+        db.insert_memory(sample_memory)
+
+        results = db.fts_search("", limit=10)
+        assert isinstance(results, list)
+
+    def test_whitespace_only_query(self, db, sample_memory):
+        """Whitespace-only query should be handled safely."""
+        db.insert_memory(sample_memory)
+
+        results = db.fts_search("   ", limit=10)
+        assert isinstance(results, list)

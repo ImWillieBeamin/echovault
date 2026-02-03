@@ -7,3 +7,14 @@ build/
 *.pyc
 models/
 docs/
+
+# Environment and secrets
+.env
+.env.*
+.env.local
+.env.*.local
+
+# Config files that may contain API keys
+*.secrets.yaml
+*.secrets.yml
+credentials.json

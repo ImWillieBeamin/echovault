@@ -313,9 +313,22 @@ class MemoryDB:
         Returns:
             List of memory dictionaries with BM25 scores
         """
-        # Build prefix matching query
+        # Sanitize and build prefix matching query
         terms = query.split()
-        fts_query = " OR ".join(f'"{term}"*' for term in terms)
+
+        # Handle empty query
+        if not terms:
+            return []
+
+        # Escape FTS special characters in each term
+        sanitized_terms = []
+        for term in terms:
+            # Escape double quotes by doubling them
+            escaped = term.replace('"', '""')
+            # Wrap in quotes to treat as literal phrase, add prefix matching
+            sanitized_terms.append(f'"{escaped}"*')
+
+        fts_query = " OR ".join(sanitized_terms)
 
         # Build WHERE clause for filters
         where_clauses = []

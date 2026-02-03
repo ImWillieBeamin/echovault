@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from memory.models import CATEGORY_HEADINGS, VALID_CATEGORIES, Memory
+from memory.security import validate_date_string
 
 
 def render_section(mem: Memory, details: Optional[str] = None) -> str:
@@ -56,8 +57,13 @@ def write_session_memory(
 
     Returns:
         Path to the session file
+
+    Raises:
+        ValueError: If date_str contains invalid characters or path traversal
     """
-    file_path = Path(vault_project_dir) / f"{date_str}-session.md"
+    # Validate date string to prevent path traversal attacks
+    validated_date = validate_date_string(date_str)
+    file_path = Path(vault_project_dir) / f"{validated_date}-session.md"
     section_content = render_section(mem, details)
 
     if not file_path.exists():

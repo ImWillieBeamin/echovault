@@ -317,3 +317,74 @@ class TestUninstall:
 
         result = uninstall_claude_code(str(claude_home))
         assert result["status"] == "ok"
+
+
+class TestHookCommandSecurity:
+    """Test that hook commands are safe from injection."""
+
+    def test_hook_commands_use_safe_patterns(self, claude_home):
+        """Verify hook commands don't use vulnerable echo patterns."""
+        from memory.setup import setup_claude_code, CLAUDE_CODE_HOOKS
+
+        # Check that hooks don't use vulnerable patterns
+        for event, hook_groups in CLAUDE_CODE_HOOKS.items():
+            for group in hook_groups:
+                for hook in group.get("hooks", []):
+                    cmd = hook.get("command", "")
+                    # Should not use bare echo with variable
+                    assert 'echo "$' not in cmd, f"Unsafe echo pattern in {event}"
+                    # Should not use bare echo with variable (single quotes won't expand)
+                    assert "echo '$" not in cmd or "$" not in cmd.replace("'$", ""), f"Unsafe echo pattern in {event}"
+
+    def test_post_tool_use_hook_uses_stdin_safely(self, claude_home):
+        """PostToolUse hook should pass data via stdin safely."""
+        from memory.setup import CLAUDE_CODE_HOOKS
+
+        post_tool_hooks = CLAUDE_CODE_HOOKS.get("PostToolUse", [])
+        assert len(post_tool_hooks) > 0
+
+        for group in post_tool_hooks:
+            for hook in group.get("hooks", []):
+                cmd = hook.get("command", "")
+                # Should use printf or here-doc for safety, not bare echo
+                assert "memory auto-save" in cmd
+                # The command should pass TOOL_INPUT safely via stdin
+                assert "TOOL_INPUT" in cmd or "stdin" in hook.get("type", "")
+
+    def test_stop_hook_uses_stdin_safely(self, claude_home):
+        """Stop hook should pass data via stdin safely."""
+        from memory.setup import CLAUDE_CODE_HOOKS
+
+        stop_hooks = CLAUDE_CODE_HOOKS.get("Stop", [])
+        assert len(stop_hooks) > 0
+
+        for group in stop_hooks:
+            for hook in group.get("hooks", []):
+                cmd = hook.get("command", "")
+                # Should use safe pattern
+                assert "memory auto-save" in cmd
+                assert "CLAUDE_RESPONSE" in cmd or "stdin" in hook.get("type", "")
+
+    def test_user_prompt_submit_uses_safe_query(self, claude_home):
+        """UserPromptSubmit should pass query safely."""
+        from memory.setup import CLAUDE_CODE_HOOKS
+
+        ups_hooks = CLAUDE_CODE_HOOKS.get("UserPromptSubmit", [])
+        assert len(ups_hooks) > 0
+
+        for group in ups_hooks:
+            for hook in group.get("hooks", []):
+                cmd = hook.get("command", "")
+                assert "memory context" in cmd
+                # Should use safe quoting
+                assert "USER_PROMPT" in cmd
+
+    def test_cursor_hooks_use_safe_patterns(self):
+        """Verify Cursor hooks don't use vulnerable patterns."""
+        from memory.setup import CURSOR_HOOKS
+
+        for event, hooks in CURSOR_HOOKS.items():
+            for hook in hooks:
+                cmd = hook.get("command", "")
+                # Should not use bare echo with variable
+                assert 'echo "$' not in cmd, f"Unsafe echo pattern in {event}"

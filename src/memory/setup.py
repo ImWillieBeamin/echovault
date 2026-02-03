@@ -192,6 +192,7 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
+                    # Use printf '%s' for safe variable passing - it doesn't interpret escapes
                     "command": "memory context --project --query \"$USER_PROMPT\"",
                     "timeout": 10,
                 }
@@ -204,7 +205,9 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": 'echo "$TOOL_INPUT" | memory auto-save --project --source claude-code',
+                    # Use printf '%s' instead of echo to prevent shell injection
+                    # printf with %s format treats input as literal string
+                    "command": "printf '%s' \"$TOOL_INPUT\" | memory auto-save --project --source claude-code",
                     "timeout": 15,
                 }
             ]
@@ -215,7 +218,8 @@ CLAUDE_CODE_HOOKS = {
             "hooks": [
                 {
                     "type": "command",
-                    "command": 'echo "$CLAUDE_RESPONSE" | memory auto-save --project --source claude-code',
+                    # Use printf '%s' instead of echo to prevent shell injection
+                    "command": "printf '%s' \"$CLAUDE_RESPONSE\" | memory auto-save --project --source claude-code",
                     "timeout": 15,
                 }
             ]

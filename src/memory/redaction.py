@@ -11,6 +11,8 @@ are never stored in agent memories:
 import re
 from typing import Optional
 
+from memory.security import safe_compile_pattern
+
 # Regex patterns for known sensitive data formats
 SENSITIVE_PATTERNS = [
     r"sk_live_[a-zA-Z0-9]+",                      # Stripe live keys
@@ -59,9 +61,12 @@ def redact(text: str, extra_patterns: Optional[list[str]] = None) -> str:
     text = text.replace("<redacted>", "").replace("</redacted>", "")
 
     # Layer 2: Automatic pattern detection
+    # Use safe pattern compilation to handle invalid regex gracefully
     all_patterns = SENSITIVE_PATTERNS + (extra_patterns or [])
     for pattern in all_patterns:
-        text = re.sub(pattern, "[REDACTED]", text, flags=re.IGNORECASE)
+        compiled = safe_compile_pattern(pattern)
+        if compiled is not None:
+            text = compiled.sub("[REDACTED]", text)
 
     return text
 
